@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import shlex
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 
 import httpx
 from dotenv import load_dotenv
@@ -293,7 +293,7 @@ TOOL_FUNCS = {
 }
 
 # ──────────────────────────────────────────────
-# OpenRouter API client with model fallback
+# OpenRouter API client with model fallback & caching
 # ──────────────────────────────────────────────
 FREE_MODELS = [
     "google/gemma-2-9b-it:free",
@@ -306,6 +306,10 @@ FREE_MODELS = [
     "huggingfaceh4/zephyr-7b-beta:free",
 ]
 
+# Cache of working models (persists across requests)
+_working_models_cache: List[str] = []
+_failed_models_cache: Set[str] = set()
+
 class OpenRouterClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -315,13 +319,41 @@ class OpenRouterClient:
             timeout=60,
         )
 
+    def _get_model_order(self) -> List[str]:
+        """Return models ordered by: known working first, then untried, then failed last."""
+        global _working_models_cache, _failed_models_cache
+        ordered = []
+        # First: models we know work
+        for m in _working_models_cache:
+            if m in FREE_MODELS:
+                ordered.append(m)
+        # Second: untried models
+        for m in FREE_MODELS:
+            if m not in _working_models_cache and m not in _failed_models_cache:
+                ordered.append(m)
+        # Last: failed models (but still try them in case they recovered)
+        for m in _failed_models_cache:
+            if m in FREE_MODELS:
+                ordered.append(m)
+        return ordered
+
     async def chat(self, messages: List[Dict], tools: List[Dict] = None) -> Dict:
+        global _working_models_cache, _failed_models_cache
+
+        # Add thinking instruction to system prompt
+        thinking_messages = list(messages)
+        if thinking_messages and thinking_messages[0].get("role") == "system":
+            thinking_messages[0] = {
+                **thinking_messages[0],
+                "content": thinking_messages[0]["content"] + "\n\nThink step by step before answering. Show your reasoning clearly."
+            }
+
         last_error = None
-        for model in FREE_MODELS:
+        for model in self._get_model_order():
             try:
                 payload = {
                     "model": model,
-                    "messages": messages,
+                    "messages": thinking_messages,
                     "temperature": 0.3,
                     "max_tokens": 4000,
                 }
@@ -331,10 +363,20 @@ class OpenRouterClient:
                 resp = await self.client.post("/chat/completions", json=payload)
                 if resp.status_code == 200:
                     data = resp.json()
-                    # Add model info to response for debugging
                     data["_model_used"] = model
+                    # Cache this model as working (move to front)
+                    if model in _failed_models_cache:
+                        _failed_models_cache.discard(model)
+                    if model not in _working_models_cache:
+                        _working_models_cache.insert(0, model)
+                    # Keep cache small
+                    if len(_working_models_cache) > 3:
+                        _working_models_cache.pop()
                     return data
                 last_error = f"{model}: {resp.status_code} - {resp.text}"
+                if resp.status_code == 404:
+                    _failed_models_cache.add(model)
+                    _working_models_cache = [m for m in _working_models_cache if m != model]
             except Exception as e:
                 last_error = f"{model}: {e}"
                 continue
