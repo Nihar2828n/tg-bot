@@ -297,13 +297,14 @@ TOOL_FUNCS = {
 # ──────────────────────────────────────────────
 FREE_MODELS = [
     "google/gemma-2-9b-it:free",
-    "google/gemma-2-27b-it:free",
     "meta-llama/llama-3.1-8b-instruct:free",
     "microsoft/phi-3-mini-128k-instruct:free",
     "deepseek/deepseek-chat-v3-0324:free",
     "qwen/qwq-32b:free",
     "meta-llama/llama-3.2-3b-instruct:free",
     "huggingfaceh4/zephyr-7b-beta:free",
+    "meta-llama/llama-3.2-1b-instruct:free",
+    "nvidia/nemotron-3-ultra:free",
 ]
 
 # Cache of working models (persists across requests)
