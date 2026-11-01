@@ -296,15 +296,10 @@ TOOL_FUNCS = {
 # OpenRouter API client with model fallback & caching
 # ──────────────────────────────────────────────
 FREE_MODELS = [
-    "google/gemma-2-9b-it:free",
-    "meta-llama/llama-3.1-8b-instruct:free",
-    "microsoft/phi-3-mini-128k-instruct:free",
-    "deepseek/deepseek-chat-v3-0324:free",
-    "qwen/qwq-32b:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "huggingfaceh4/zephyr-7b-beta:free",
-    "meta-llama/llama-3.2-1b-instruct:free",
-    "nvidia/nemotron-3-ultra:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "cohere/north-mini-code:free",
+    "liquid/lfm-2.5-2.6b:free",
+    "nvidia/nemotron-3.5-super-vl:free",
 ]
 
 # Cache of working models (persists across requests)
