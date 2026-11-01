@@ -302,7 +302,8 @@ FREE_MODELS = [
     "microsoft/phi-3-mini-128k-instruct:free",
     "deepseek/deepseek-chat-v3-0324:free",
     "qwen/qwq-32b:free",
-    "mistralai/mistral-7b-instruct:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "huggingfaceh4/zephyr-7b-beta:free",
 ]
 
 class OpenRouterClient:
