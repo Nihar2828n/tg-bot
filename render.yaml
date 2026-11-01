@@ -1,0 +1,16 @@
+# Render Blueprint - deploy with "New Blueprint Instance" in Render dashboard
+services:
+  - type: worker  # worker = no web port needed, perfect for polling bot
+    name: tg-claude-bot
+    env: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false  # set manually in dashboard
+      - key: OPENROUTER_API_KEY
+        sync: false  # set manually in dashboard
+      - key: OPENROUTER_MODEL
+        value: anthropic/claude-3.5-sonnet
+    # No health check needed for worker
+    # Auto-deploy on push to main
+    autoDeploy: true
