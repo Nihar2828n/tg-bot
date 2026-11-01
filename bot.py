@@ -300,6 +300,9 @@ FREE_MODELS = [
     "cohere/north-mini-code:free",
     "liquid/lfm-2.5-2.6b:free",
     "nvidia/nemotron-3.5-super-vl:free",
+    "google/gemma-4-31b-it:free",
+    "xingchen-agi/xing4.0-29b-a4b:free",
+    "google/gemma-4-26b-a4b-it:free",
 ]
 
 # Cache of working models (persists across requests)
@@ -333,6 +336,42 @@ class OpenRouterClient:
                 ordered.append(m)
         return ordered
 
+    async def _ping_model(self, model: str) -> bool:
+        """Quick ping to check if model is available (uses minimal tokens)."""
+        try:
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": "ping"}],
+                "max_tokens": 5,
+                "temperature": 0,
+            }
+            resp = await self.client.post("/chat/completions", json=payload, timeout=10)
+            if resp.status_code == 200:
+                return True
+            if resp.status_code == 404:
+                _failed_models_cache.add(model)
+                return False
+            return False
+        except Exception:
+            return False
+
+    async def _ensure_model_works(self, model: str) -> bool:
+        """Ping model if not cached as working; return True if works."""
+        global _working_models_cache, _failed_models_cache
+        if model in _working_models_cache:
+            return True
+        if model in _failed_models_cache:
+            return False
+        # Ping it
+        works = await self._ping_model(model)
+        if works:
+            _working_models_cache.insert(0, model)
+            if len(_working_models_cache) > 3:
+                _working_models_cache.pop()
+        else:
+            _failed_models_cache.add(model)
+        return works
+
     async def chat(self, messages: List[Dict], tools: List[Dict] = None) -> Dict:
         global _working_models_cache, _failed_models_cache
 
@@ -346,6 +385,9 @@ class OpenRouterClient:
 
         last_error = None
         for model in self._get_model_order():
+            # Ping first - only proceed if model responds
+            if not await self._ensure_model_works(model):
+                continue
             try:
                 payload = {
                     "model": model,
