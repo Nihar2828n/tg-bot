@@ -34,6 +34,25 @@ def health(): return "OK"
 threading.Thread(target=lambda: app_flask.run(host="0.0.0.0", port=PORT), daemon=True).start()
 
 # ──────────────────────────────────────────────
+# Render port binding (health check)
+# ──────────────────────────────────────────────
+import threading
+from flask import Flask
+PORT = int(os.getenv("PORT", "8080"))
+app_flask = Flask(__name__)
+
+@app_flask.route("/")
+def health():
+    return "OK"
+
+@app_flask.route("/health")
+def health_check():
+    return {"status": "ok"}
+
+# Start Flask in background thread
+threading.Thread(target=lambda: app_flask.run(host="0.0.0.0", port=PORT), daemon=True).start()
+
+# ──────────────────────────────────────────────
 # Config
 # ──────────────────────────────────────────────
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -274,12 +293,19 @@ TOOL_FUNCS = {
 }
 
 # ──────────────────────────────────────────────
-# OpenRouter API client
+# OpenRouter API client with model fallback
 # ──────────────────────────────────────────────
+FREE_MODELS = [
+    "google/gemma-2-9b-it:free",
+    "google/gemma-2-27b-it:free",
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "microsoft/phi-3-mini-128k-instruct:free",
+    "qwen/qwen-2-7b-instruct:free",
+]
+
 class OpenRouterClient:
-    def __init__(self, api_key: str, model: str):
+    def __init__(self, api_key: str):
         self.api_key = api_key
-        self.model = model
         self.client = httpx.AsyncClient(
             base_url=OPENROUTER_BASE_URL,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -287,18 +313,29 @@ class OpenRouterClient:
         )
 
     async def chat(self, messages: List[Dict], tools: List[Dict] = None) -> Dict:
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0.3,
-            "max_tokens": 4000,
-        }
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
-        resp = await self.client.post("/chat/completions", json=payload)
-        resp.raise_for_status()
-        return resp.json()
+        last_error = None
+        for model in FREE_MODELS:
+            try:
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.3,
+                    "max_tokens": 4000,
+                }
+                if tools:
+                    payload["tools"] = tools
+                    payload["tool_choice"] = "auto"
+                resp = await self.client.post("/chat/completions", json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Add model info to response for debugging
+                    data["_model_used"] = model
+                    return data
+                last_error = f"{model}: {resp.status_code} - {resp.text}"
+            except Exception as e:
+                last_error = f"{model}: {e}"
+                continue
+        raise RuntimeError(f"All free models failed: {last_error}")
 
     async def close(self):
         await self.client.aclose()
@@ -360,7 +397,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conv = get_conversation(user_id)
     conv.append({"role": "user", "content": text})
 
-    client = OpenRouterClient(OPENROUTER_API_KEY, OPENROUTER_MODEL)
+    client = OpenRouterClient(OPENROUTER_API_KEY)
 
     try:
         # First LLM call
@@ -437,6 +474,7 @@ def main():
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
     if not OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY not set")
+    # OPENROUTER_MODEL no longer required - uses FREE_MODELS fallback
 
     app = (
         Application.builder()
