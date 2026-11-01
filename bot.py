@@ -24,6 +24,14 @@ from telegram.ext import (
 )
 
 load_dotenv()
+# Render port binding
+import threading
+from flask import Flask
+PORT = int(os.getenv("PORT", "8080"))
+app_flask = Flask(__name__)
+@app_flask.route("/")
+def health(): return "OK"
+threading.Thread(target=lambda: app_flask.run(host="0.0.0.0", port=PORT), daemon=True).start()
 
 # ──────────────────────────────────────────────
 # Config
