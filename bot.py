@@ -149,6 +149,21 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "send_file",
+            "description": "Send a file from the server to the Telegram chat as a document",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to file (absolute or relative to working directory)"},
+                    "caption": {"type": "string", "description": "Optional caption for the file"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
             "description": "Search the web via DuckDuckGo HTML scrape (simple, no API key)",
             "parameters": {
@@ -222,6 +237,26 @@ async def tool_list_files(path: str = ".") -> str:
     return "\n".join(items) if items else "(empty)"
 
 
+async def tool_send_file(update: Update, path: str, caption: str = "") -> str:
+    """Send a file as a Telegram document."""
+    p = _safe_path(path)
+    if not p.exists():
+        return f"Error: File not found: {path}"
+    if not p.is_file():
+        return f"Error: Not a file: {path}"
+
+    try:
+        from telegram import InputFile
+        with p.open("rb") as f:
+            await update.message.reply_document(
+                document=InputFile(f, filename=p.name),
+                caption=caption or f"File: {p.name}"
+            )
+        return f"✅ Sent file: {p.name}"
+    except Exception as e:
+        return f"Error sending file: {e}"
+
+
 async def tool_run_shell(command: str, timeout: int = SHELL_TIMEOUT) -> str:
     try:
         # Run in WORK_DIR
@@ -291,6 +326,7 @@ TOOL_FUNCS = {
     "run_shell": tool_run_shell,
     "web_search": tool_web_search,
     "fetch_url": tool_fetch_url,
+    "send_file": tool_send_file,
 }
 
 # ──────────────────────────────────────────────
@@ -500,7 +536,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"🔧 *Using {func_name}...*", parse_mode="Markdown")
 
                 if func_name in TOOL_FUNCS:
-                    result = await TOOL_FUNCS[func_name](**args)
+                    if func_name == "send_file":
+                        result = await TOOL_FUNCS[func_name](update=update, **args)
+                    else:
+                        result = await TOOL_FUNCS[func_name](**args)
                 else:
                     result = f"Unknown tool: {func_name}"
 
