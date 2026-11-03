@@ -378,10 +378,14 @@ async def tool_web_search(query: str, max_results: int = 5) -> str:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(resp.text, "html.parser")
         results = []
-        for result in soup.select(".result__snippet")[:max_results]:
-            text = result.get_text(strip=True)
-            if text:
-                results.append(text)
+        # Try multiple selectors (DDG changes HTML frequently)
+        for selector in [".result__snippet", ".web-result-description", ".snippet", "[data-result='snippet']"]:
+            for result in soup.select(selector)[:max_results]:
+                text = result.get_text(strip=True)
+                if text and text not in results:
+                    results.append(text)
+            if results:
+                break
         return "\n\n".join(results) if results else "No results found."
     except Exception as e:
         return f"Search error: {e}"
@@ -390,11 +394,17 @@ async def tool_web_search(query: str, max_results: int = 5) -> str:
 async def tool_fetch_url(url: str, max_chars: int = 5000) -> str:
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; TelegramBot/1.0)"})
         content = resp.text
-        if len(content) > max_chars:
-            content = content[:max_chars] + f"\n... [truncated, {len(content)} total]"
-        return content
+        # Try to extract main content (skip scripts/styles)
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(content, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+        text = soup.get_text(separator="\n", strip=True)
+        if len(text) > max_chars:
+            text = text[:max_chars] + f"\n... [truncated, {len(text)} total]"
+        return text if text else "No readable content found."
     except Exception as e:
         return f"Fetch error: {e}"
 
