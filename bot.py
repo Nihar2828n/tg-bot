@@ -577,36 +577,49 @@ class OpenRouterClient:
             }
 
         last_error = None
+        models_tried = 0
+        max_models_per_request = 2  # Limit fallback attempts per request
+
+        async def _try_model(model: str) -> Dict:
+            payload = {
+                "model": model,
+                "messages": thinking_messages,
+                "temperature": 0.3,
+                "max_tokens": 4000,
+            }
+            if tools:
+                payload["tools"] = tools
+                payload["tool_choice"] = "auto"
+            resp = await self.client.post("/chat/completions", json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                data["_model_used"] = model
+                if model in _failed_models_cache:
+                    _failed_models_cache.discard(model)
+                if model not in _working_models_cache:
+                    _working_models_cache.insert(0, model)
+                if len(_working_models_cache) > 3:
+                    _working_models_cache.pop()
+                return data
+            last_error = f"{model}: {resp.status_code} - {resp.text}"
+            if resp.status_code == 404:
+                _failed_models_cache.add(model)
+            raise RuntimeError(last_error)
+
         for model in self._get_model_order():
-            # Ping first - only proceed if model responds
+            if models_tried >= max_models_per_request:
+                break
             if not await self._ensure_model_works(model):
                 continue
+            models_tried += 1
             try:
-                payload = {
-                    "model": model,
-                    "messages": thinking_messages,
-                    "temperature": 0.3,
-                    "max_tokens": 4000,
-                }
-                if tools:
-                    payload["tools"] = tools
-                    payload["tool_choice"] = "auto"
-                resp = await self.client.post("/chat/completions", json=payload)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    data["_model_used"] = model
-                    # Cache this model as working (move to front)
-                    if model in _failed_models_cache:
-                        _failed_models_cache.discard(model)
-                    if model not in _working_models_cache:
-                        _working_models_cache.insert(0, model)
-                    # Keep cache small
-                    if len(_working_models_cache) > 3:
-                        _working_models_cache.pop()
-                    return data
-                last_error = f"{model}: {resp.status_code} - {resp.text}"
-                if resp.status_code == 404:
-                    _failed_models_cache.add(model)
+                # 45s total timeout per model attempt
+                return await asyncio.wait_for(_try_model(model), timeout=45)
+            except Exception as e:
+                last_error = f"{model}: {e}"
+                continue
+
+        raise RuntimeError(f"All models failed (tried {models_tried}): {last_error}")
                     _working_models_cache = [m for m in _working_models_cache if m != model]
             except Exception as e:
                 last_error = f"{model}: {e}"
