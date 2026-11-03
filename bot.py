@@ -515,7 +515,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             choice = resp["choices"][0]
             msg = choice["message"]
 
-        final_text = msg.get("content", "(empty response)")
+        final_text = msg.get("content") or "(empty response)"
         conv.append({"role": "assistant", "content": final_text})
 
         # Send response (handle long messages)
