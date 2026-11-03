@@ -654,9 +654,59 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# Style presets
+STYLE_PROMPTS = {
+    "default": "Senior engineer — Plan → Act → Verify, concise, tool-first",
+    "concise": "Minimal responses, only essential info, no fluff",
+    "tutorial": "Explains everything step-by-step, teaches concepts",
+    "debug": "Shows full reasoning, tool calls, internal state",
+    "architect": "High-level design first, then implementation details",
+    "code_only": "Only code blocks, no explanations unless asked",
+}
+
+# Per-user style preference
+user_styles: Dict[int, str] = {}
+
+
+def get_style_prompt(user_id: int) -> str:
+    """Get system prompt with user's preferred style."""
+    style = user_styles.get(user_id, "default")
+    base = SYSTEM_PROMPT
+    style_instructions = {
+        "concise": "\n\n**STYLE: CONCISE** — Answer in 1-3 sentences max. No fluff. Code only when needed.",
+        "tutorial": "\n\n**STYLE: TUTORIAL** — Explain every step. Teach concepts. Show alternatives. Use analogies.",
+        "debug": "\n\n**STYLE: DEBUG** — Show full reasoning. Log every tool call. Explain internal state. Verbose.",
+        "architect": "\n\n**STYLE: ARCHITECT** — Start with high-level design. Show trade-offs. Then implement. Diagram-first thinking.",
+        "code_only": "\n\n**STYLE: CODE_ONLY** — Output only code blocks. No prose unless explicitly asked. Pure implementation.",
+    }
+    return base + style_instructions.get(style, "")
+
+
+async def style_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not context.args:
+        current = user_styles.get(user_id, "default")
+        opts = "\n".join(f"• `{k}` — {v}" for k, v in STYLE_PROMPTS.items())
+        await update.message.reply_text(
+            f"Current style: **{current}**\n\nAvailable:\n{opts}\n\nUsage: `/style tutorial`",
+            parse_mode="Markdown",
+        )
+        return
+
+    style = context.args[0].lower()
+    if style not in STYLE_PROMPTS:
+        await update.message.reply_text(f"❌ Unknown style: `{style}`")
+        return
+
+    user_styles[user_id] = style
+    # Reset conversation with new style
+    conversations[user_id] = [{"role": "system", "content": get_style_prompt(user_id)}]
+    await update.message.reply_text(f"✅ Style set to **{style}** — conversation reset", parse_mode="Markdown")
+
+
 async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    conversations[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    conversations[user_id] = [{"role": "system", "content": get_style_prompt(user_id)}]
     await update.message.reply_text("🧹 Conversation cleared.")
 
 
@@ -771,6 +821,7 @@ async def post_init(app: Application):
     await app.bot.set_my_commands([
         BotCommand("start", "Start the bot"),
         BotCommand("clear", "Clear conversation history"),
+        BotCommand("style", "Switch response style (concise/tutorial/debug/architect/code_only)"),
     ])
 
 
@@ -790,6 +841,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("clear", clear_cmd))
+    app.add_handler(CommandHandler("style", style_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
 
