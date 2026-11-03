@@ -69,19 +69,38 @@ MAX_OUTPUT_CHARS = 50000
 MAX_FILE_READ_CHARS = 50000
 SHELL_TIMEOUT = 120
 
-# ──────────────────────────────────────────────
-# System prompt - makes it act like Claude Code
-# ──────────────────────────────────────────────
-SYSTEM_PROMPT = """You are a helpful AI assistant accessible via Telegram. You have access to tools for:
-- Reading/writing files on the server
-- Running shell commands
-- Searching the web / fetching URLs
+# Context window management
+MAX_CONVERSATION_MESSAGES = 30  # Keep last N messages
+SUMMARIZE_THRESHOLD = 20  # Summarize when exceeding this
 
-Be concise but thorough. Use tools when needed to answer accurately.
-When running commands, prefer non-destructive operations first.
-If a command fails, explain the error and suggest alternatives.
+# ──────────────────────────────────────────────
+# System prompt - Claude Code style agent
+# ──────────────────────────────────────────────
+SYSTEM_PROMPT = """You are a **senior software engineer** accessible via Telegram. You have full access to a Linux server and can use tools to accomplish any coding task.
+
+**Your workflow (like Claude Code):**
+1. **PLAN** — Understand the task, break it down, think before acting
+2. **ACT** — Use tools efficiently (read → write → run → verify)
+3. **VERIFY** — Check results, run tests, confirm it works
+4. **ITERATE** — Fix issues, improve, clean up
+
+**Tools available:**
+- `read_file` / `write_file` / `list_files` — Full filesystem access (any path)
+- `run_shell` — Run any command (2 min timeout, 50K output)
+- `send_file` — Send actual files in Telegram chat
+- `web_search` / `fetch_url` — Research online
+- `git` operations — commit, diff, status, log, push
+
+**Guidelines:**
+- Be thorough but concise. Use tools proactively.
+- Prefer `run_shell` for git, python, npm, docker, etc.
+- Read before writing. Run tests after changes.
+- Show reasoning: "I'll check X first, then do Y because Z"
+- If unsure, ask clarifying questions.
+- Clean up temp files. No destructive ops without confirmation.
 
 Working directory: {work_dir}
+You are root in a Docker container on Render.
 """.format(work_dir=WORK_DIR)
 
 # ──────────────────────────────────────────────
@@ -188,6 +207,67 @@ TOOLS = [
                     "max_chars": {"type": "integer", "description": "Max chars to return", "default": 5000},
                 },
                 "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git",
+            "description": "Run git commands (status, diff, log, commit, push, etc.)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "args": {"type": "string", "description": "Git arguments (e.g., 'status', 'diff HEAD', 'commit -m \"msg\"', 'push')"},
+                },
+                "required": ["args"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "python_exec",
+            "description": "Execute Python code and return output",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Python code to execute"},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 60},
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_diff",
+            "description": "Show diff between two files or file and git HEAD",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path"},
+                    "compare_to": {"type": "string", "description": "Compare to: 'HEAD' (git), 'file' (another file), or 'content' (inline)"},
+                    "other_path": {"type": "string", "description": "Other file path or content if compare_to is 'file' or 'content'"},
+                },
+                "required": ["path", "compare_to"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": "Make targeted edits to a file (find/replace)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path"},
+                    "old_text": {"type": "string", "description": "Text to find and replace"},
+                    "new_text": {"type": "string", "description": "Replacement text"},
+                },
+                "required": ["path", "old_text", "new_text"],
             },
         },
     },
@@ -319,6 +399,78 @@ async def tool_fetch_url(url: str, max_chars: int = 5000) -> str:
         return f"Fetch error: {e}"
 
 
+async def tool_git(args: str) -> str:
+    """Run git command."""
+    cmd = f"git {args}"
+    return await tool_run_shell(cmd, timeout=60)
+
+
+async def tool_python_exec(code: str, timeout: int = 60) -> str:
+    """Execute Python code."""
+    # Write to temp file and execute
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(code)
+        temp_path = f.name
+    try:
+        result = await tool_run_shell(f"python {temp_path}", timeout=timeout)
+    finally:
+        try:
+            os.unlink(temp_path)
+        except:
+            pass
+    return result
+
+
+async def tool_file_diff(path: str, compare_to: str, other_path: str = "") -> str:
+    """Show diff between file and HEAD, another file, or inline content."""
+    p = _safe_path(path)
+    if not p.exists():
+        return f"Error: File not found: {path}"
+
+    if compare_to == "HEAD":
+        cmd = f"git diff HEAD -- {path}"
+        return await tool_run_shell(cmd)
+    elif compare_to == "file":
+        if not other_path:
+            return "Error: other_path required for file comparison"
+        other = _safe_path(other_path)
+        if not other.exists():
+            return f"Error: Other file not found: {other_path}"
+        cmd = f"diff -u {other} {p}"
+        return await tool_run_shell(cmd)
+    elif compare_to == "content":
+        if not other_path:
+            return "Error: other_path (content) required for content comparison"
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.tmp', delete=False) as f:
+            f.write(other_path)
+            temp_path = f.name
+        try:
+            cmd = f"diff -u {temp_path} {p}"
+            return await tool_run_shell(cmd)
+        finally:
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+    else:
+        return f"Error: Invalid compare_to: {compare_to}"
+
+
+async def tool_edit_file(path: str, old_text: str, new_text: str) -> str:
+    """Make targeted edit to a file."""
+    p = _safe_path(path)
+    if not p.exists():
+        return f"Error: File not found: {path}"
+    content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace")
+    if old_text not in content:
+        return f"Error: Text not found in file"
+    new_content = content.replace(old_text, new_text)
+    await asyncio.to_thread(p.write_text, new_content, encoding="utf-8")
+    return f"✅ Edited {path} ({len(old_text)} → {len(new_text)} chars)"
+
+
 TOOL_FUNCS = {
     "read_file": tool_read_file,
     "write_file": tool_write_file,
@@ -327,6 +479,10 @@ TOOL_FUNCS = {
     "web_search": tool_web_search,
     "fetch_url": tool_fetch_url,
     "send_file": tool_send_file,
+    "git": tool_git,
+    "python_exec": tool_python_exec,
+    "file_diff": tool_file_diff,
+    "edit_file": tool_edit_file,
 }
 
 # ──────────────────────────────────────────────
@@ -504,6 +660,30 @@ async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧹 Conversation cleared.")
 
 
+async def _manage_context_window(conv: List[Dict]) -> List[Dict]:
+    """Trim/summarize conversation to fit context window."""
+    global conversations
+    if len(conv) <= MAX_CONVERSATION_MESSAGES:
+        return conv
+
+    # Keep system prompt + last N messages
+    system_msg = conv[0] if conv and conv[0].get("role") == "system" else None
+    recent = conv[-MAX_CONVERSATION_MESSAGES:]
+
+    if system_msg and system_msg not in recent:
+        recent = [system_msg] + recent
+
+    # Summarize dropped messages (optional - could call LLM here)
+    if len(conv) > len(recent):
+        dropped = len(conv) - len(recent)
+        summary = f"[... {dropped} earlier messages summarized ...]"
+        if system_msg:
+            return [system_msg, {"role": "system", "content": summary}] + recent[1:]
+        return [{"role": "system", "content": summary}] + recent
+
+    return recent
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -515,6 +695,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     conv = get_conversation(user_id)
+    conv = _manage_context_window(conv)
+    conversations[user_id] = conv  # Save trimmed
     conv.append({"role": "user", "content": text})
 
     client = OpenRouterClient(OPENROUTER_API_KEY)
