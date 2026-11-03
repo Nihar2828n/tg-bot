@@ -588,7 +588,7 @@ class OpenRouterClient:
 
         last_error = None
         models_tried = 0
-        max_models_per_request = 2  # Limit fallback attempts per request
+        max_models_per_request = 4  # Try up to 4 models per request
 
         async def _try_model(model: str) -> Dict:
             payload = {
