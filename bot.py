@@ -63,10 +63,11 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # Render sets PORT, but polling mode doesn't need it
 PORT = int(os.getenv("PORT", "8080"))
 
-# Safety: restrict shell to this directory tree
+# No restrictions - full access
 WORK_DIR = Path.cwd().resolve()
-MAX_OUTPUT_CHARS = 4000
-MAX_FILE_READ_CHARS = 8000
+MAX_OUTPUT_CHARS = 50000
+MAX_FILE_READ_CHARS = 50000
+SHELL_TIMEOUT = 120
 
 # ──────────────────────────────────────────────
 # System prompt - makes it act like Claude Code
@@ -181,11 +182,11 @@ TOOLS = [
 # Tool implementations
 # ──────────────────────────────────────────────
 def _safe_path(rel_path: str) -> Path:
-    """Resolve path relative to WORK_DIR, prevent traversal."""
-    target = (WORK_DIR / rel_path).resolve()
-    if not str(target).startswith(str(WORK_DIR)):
-        raise ValueError(f"Path traversal blocked: {rel_path}")
-    return target
+    """Resolve path - allow absolute paths, no traversal restriction."""
+    # If absolute path, use as-is; otherwise relative to WORK_DIR
+    if os.path.isabs(rel_path):
+        return Path(rel_path)
+    return (WORK_DIR / rel_path).resolve()
 
 
 async def tool_read_file(path: str) -> str:
@@ -221,7 +222,7 @@ async def tool_list_files(path: str = ".") -> str:
     return "\n".join(items) if items else "(empty)"
 
 
-async def tool_run_shell(command: str, timeout: int = 30) -> str:
+async def tool_run_shell(command: str, timeout: int = SHELL_TIMEOUT) -> str:
     try:
         # Run in WORK_DIR
         proc = await asyncio.create_subprocess_shell(
