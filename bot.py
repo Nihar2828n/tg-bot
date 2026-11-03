@@ -620,11 +620,6 @@ class OpenRouterClient:
                 continue
 
         raise RuntimeError(f"All models failed (tried {models_tried}): {last_error}")
-                    _working_models_cache = [m for m in _working_models_cache if m != model]
-            except Exception as e:
-                last_error = f"{model}: {e}"
-                continue
-        raise RuntimeError(f"All free models failed: {last_error}")
 
     async def close(self):
         await self.client.aclose()
@@ -758,7 +753,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     conv = get_conversation(user_id)
-    conv = _manage_context_window(conv)
+    conv = await _manage_context_window(conv)
     conversations[user_id] = conv  # Save trimmed
     conv.append({"role": "user", "content": text})
 
