@@ -619,14 +619,14 @@ class OpenRouterClient:
         for model in self._get_model_order():
             if models_tried >= max_models_per_request:
                 break
-            if not await self._ensure_model_works(model):
-                continue
             models_tried += 1
             try:
-                # 45s total timeout per model attempt
+                # 45s total timeout per model attempt - no pre-ping
                 return await asyncio.wait_for(_try_model(model), timeout=45)
             except Exception as e:
                 last_error = f"{model}: {e}"
+                if "404" in str(e) or "not found" in str(e).lower():
+                    _failed_models_cache.add(model)
                 continue
 
         raise RuntimeError(f"All models failed (tried {models_tried}): {last_error}")
